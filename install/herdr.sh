@@ -165,14 +165,21 @@ if [[ "$EXISTING_CT" == "no" ]]; then
   fi
 
   SSH_KEY_ARGS=()
-  if [[ -f /root/.ssh/id_rsa.pub ]]; then
-    SSH_KEY_ARGS=(--ssh-keys /root/.ssh/id_rsa.pub)
-    msg_ok "Injecting host SSH key (/root/.ssh/id_rsa.pub)."
+  SSH_MANUAL_APPEND=0
+  HOST_SSH_PUB=""
+  for k in /root/.ssh/id_rsa.pub /root/.ssh/id_ed25519.pub; do
+    if [[ -f "$k" ]]; then HOST_SSH_PUB="$k"; break; fi
+  done
+  if [[ -n "$HOST_SSH_PUB" ]]; then
+    SSH_KEY_ARGS=(--ssh-public-keys "$HOST_SSH_PUB")
+    msg_ok "Injecting host SSH key (${HOST_SSH_PUB})."
   else
-    msg_info "No /root/.ssh/id_rsa.pub on host - a random root password will be set instead."
+    msg_info "No host SSH public key found - a random root password will be set instead."
   fi
 
-  pct create "$CT_ID" "$TEMPLATE_NAME" \
+  # --ssh-public-keys requires the option name in older PVE; probe once and fall
+  # back to creating without keys (key is then appended manually after start).
+  if ! pct create "$CT_ID" "$TEMPLATE_NAME" \
     --hostname "$CT_HOSTNAME" \
     --cores "$CT_CORES" \
     --memory "$CT_RAM" \
@@ -182,7 +189,27 @@ if [[ "$EXISTING_CT" == "no" ]]; then
     --features nesting=1 \
     --onboot 1 \
     --start 0 \
-    "${SSH_KEY_ARGS[@]}"
+    "${SSH_KEY_ARGS[@]}" 2>"${DEBUG_DIR}/pct-create-err.log"; then
+    if grep -q "ssh-public-keys\|ssh-keys" "${DEBUG_DIR}/pct-create-err.log" 2>/dev/null \
+       && [[ ${#SSH_KEY_ARGS[@]} -gt 0 ]]; then
+      msg_info "PVE does not support --ssh-public-keys at create - appending key after start instead."
+      SSH_MANUAL_APPEND=1
+      SSH_KEY_ARGS=()
+    else
+      cat "${DEBUG_DIR}/pct-create-err.log" >&2
+      die "$LINENO" "pct create failed - see pct error above."
+    fi
+    pct create "$CT_ID" "$TEMPLATE_NAME" \
+      --hostname "$CT_HOSTNAME" \
+      --cores "$CT_CORES" \
+      --memory "$CT_RAM" \
+      --rootfs "${CT_DISK_STORE}:${CT_DISK}" \
+      --net0 "name=eth0,bridge=${BRIDGE},ip=dhcp,firewall=0" \
+      --unprivileged 1 \
+      --features nesting=1 \
+      --onboot 1 \
+      --start 0
+  fi
 
   msg_ok "Container ${CT_ID} created (unprivileged, onboot enabled, DHCP via ${BRIDGE})."
 fi
@@ -204,6 +231,15 @@ for _ in $(seq 1 25); do
 done
 [[ -n "$CT_IP" ]] || die "$LINENO" "Container got no IPv4 on eth0 within 60s (bridge ${BRIDGE}/DHCP)."
 msg_ok "Container IP: ${CT_IP}"
+
+# Manual SSH key append (fallback when pct create lacked --ssh-public-keys)
+if [[ "${SSH_MANUAL_APPEND:-0}" == "1" && -n "${HOST_SSH_PUB:-}" ]]; then
+  msg_info "Appending host SSH key manually..."
+  pct exec "$CT_ID" -- mkdir -p /root/.ssh
+  pct push "$CT_ID" "$HOST_SSH_PUB" /root/.ssh/authorized_keys --user 0 --group 0 --perms 0600
+  pct exec "$CT_ID" -- chmod 700 /root/.ssh
+  msg_ok "Host SSH key appended to /root/.ssh/authorized_keys."
+fi
 
 # ----------------------------------------------------------------------------
 # Fetch ct/ files (from local checkout when available, else from GitHub)
@@ -293,8 +329,8 @@ echo "   CT IP:         ${CT_IP} (DHCP)"
 echo "   Web terminal:  http://${CT_IP}:${WEB_PORT}"
 echo "                  Basic-Auth: herdr / herdr  (change it! see README)"
 echo "   SSH:           ssh root@${CT_IP}"
-if [[ -f /root/.ssh/id_rsa.pub ]]; then
-  echo "                  (host key injected: ${CT_IP} is your id_rsa)"
+if [[ -n "${HOST_SSH_PUB:-}" ]]; then
+  echo "                  (host key injected: ${HOST_SSH_PUB})"
 else
   echo "   Root password: ${ROOT_PW}   <- change: pct exec ${CT_ID} -- passwd"
 fi
