@@ -17,9 +17,12 @@ TTYD_BIN="/usr/local/bin/ttyd"
 LOG_FILE="/root/herdr-install.log"
 
 # Random web password when none provided
+# NOTE: dd instead of `tr | head` (head would SIGPIPE-fail under pipefail)
 if [[ -z "$WEB_PW" ]]; then
-  WEB_PW="$(tr -dc 'a-zA-Z0-9' < /dev/urandom 2>/dev/null | head -c 16 || true)"
-  [[ -n "$WEB_PW" ]] || WEB_PW="herdr$(date +%s)"
+  # 256 bytes -> ~62 alnum chars survive tr; ${WEB_PW:0:16} is then always 16 chars
+  WEB_PW="$(dd if=/dev/urandom bs=256 count=1 2>/dev/null | tr -dc 'a-zA-Z0-9' || true)"
+  [[ -z "$WEB_PW" ]] && WEB_PW="herdr$(date +%s)"
+  WEB_PW="${WEB_PW:0:16}"
 fi
 
 # Full debug log, always captured (complete error chains requirement)

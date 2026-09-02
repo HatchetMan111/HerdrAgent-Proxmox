@@ -265,19 +265,32 @@ for f in "${PUSH_FILES[@]}"; do
 done
 
 # Random passwords (root SSH fallback + web terminal basic auth)
-rand_pw() { tr -dc 'a-zA-Z0-9' < /dev/urandom 2>/dev/null | head -c 16; }
-ROOT_PW="$(rand_pw)"; [[ -n "$ROOT_PW" ]] || ROOT_PW="herdr$(date +%s)"
+# NOTE: no `tr | head` here - that dies with SIGPIPE (141) under pipefail.
+# dd reads exactly N bytes and exits cleanly, so the pipe is safe.
+rand_pw() {
+  local s
+  # 256 bytes -> ~62 alnum chars survive tr; ${s:0:16} is then always 16 chars
+  s=$(dd if=/dev/urandom bs=256 count=1 2>/dev/null | tr -dc 'a-zA-Z0-9' || true)
+  [[ -z "$s" ]] && s="herdr$(date +%s)"
+  echo "${s:0:16}"
+}
+ROOT_PW="$(rand_pw)"
 WEB_USER="herdr"
-WEB_PW="$(rand_pw)";    [[ -n "$WEB_PW" ]]    || WEB_PW="web$(date +%s)"
+WEB_PW="$(rand_pw)"
 
 # ----------------------------------------------------------------------------
 # Run in-container installer
 # ----------------------------------------------------------------------------
 msg_info "Running in-container installer (apt, ssh, herdr, ttyd, systemd)..."
 CT_OUT="${DEBUG_DIR}/ct-out-$$"
-if ! pct exec "$CT_ID" -- bash /root/herdr-install.sh "$HERDR_VERSION" "$ROOT_PW" "$WEB_USER" "$WEB_PW" \
-     | tee "$CT_OUT"; then
-  msg_err "In-container installer failed. Container journal (last 100 lines):"
+# PIPESTATUS: only the pct exec exit code decides success (tee must not mask it)
+set +e
+pct exec "$CT_ID" -- bash /root/herdr-install.sh "$HERDR_VERSION" "$ROOT_PW" "$WEB_USER" "$WEB_PW" \
+  2>&1 | tee "$CT_OUT"
+CT_RC=${PIPESTATUS[0]}
+set -e
+if [[ "$CT_RC" -ne 0 ]]; then
+  msg_err "In-container installer failed (exit ${CT_RC}). Container journal (last 100 lines):"
   pct exec "$CT_ID" -- journalctl --no-pager -n 100 || true
   pct exec "$CT_ID" -- cat /root/herdr-install.log || true
   die "$LINENO" "In-container installation failed - full output above."
