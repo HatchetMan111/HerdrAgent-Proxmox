@@ -1,0 +1,19 @@
+[Unit]
+Description=ttyd web terminal for herdr
+After=network-online.target herdr.service
+Wants=network-online.target
+Requires=herdr.service
+
+[Service]
+Type=simple
+User=root
+Environment=HOME=/root
+Environment=TERM=xterm-256color
+# Web UI: http://[CT-IP]:7681  (basic auth herdr:herdr - change after install!)
+# -W = allow web UI to write / accept input; binds 0.0.0.0 by default
+ExecStart=/usr/local/bin/ttyd -W -p 7681 -c herdr:herdr /usr/local/bin/herdr
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
