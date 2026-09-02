@@ -256,7 +256,7 @@ for f in "${PUSH_FILES[@]}"; do
   if [[ -n "$SCRIPT_DIR" && -f "${SCRIPT_DIR}/ct/${f}" ]]; then
     cp "${SCRIPT_DIR}/ct/${f}" "${STAGING_DIR}/${f}"
   else
-    curl -fsSL --retry 3 --connect-timeout 15 -o "${STAGING_DIR}/${f}" \
+    curl -fsSL --retry 5 --retry-all-errors --connect-timeout 15 -o "${STAGING_DIR}/${f}" \
       "${RAW_REPO_BASE}/ct/${f}" \
       || die "$LINENO" "Download failed: ${RAW_REPO_BASE}/ct/${f}"
   fi

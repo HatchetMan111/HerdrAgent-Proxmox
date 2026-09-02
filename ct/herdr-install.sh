@@ -32,6 +32,19 @@ step() { echo "=== $* ==="; }
 
 step "[1/6] apt update + base packages"
 export DEBIAN_FRONTEND=noninteractive
+
+# DNS readiness check (fresh CTs can have transient DNS failures right after DHCP)
+DNS_OK=0
+for i in $(seq 1 10); do
+  if getent hosts deb.debian.org >/dev/null 2>&1 || getent hosts github.com >/dev/null 2>&1; then
+    DNS_OK=1; break
+  fi
+  echo "DNS not ready yet (attempt ${i}/10) - waiting 3s..."
+  sleep 3
+done
+[[ "$DNS_OK" == "1" ]] \
+  || { echo "ERROR: DNS resolution failed after 10 attempts - check CT network (bridge/DHCP/DNS)." >&2; exit 9; }
+
 apt-get update -qq
 apt-get install -y -qq curl wget ca-certificates openssh-server \
   iproute2 procps less nano jq
@@ -55,23 +68,31 @@ case "$ARCH" in
 esac
 HERDR_URL="https://github.com/herdrdev/herdr/releases/download/v${HERDR_VERSION}/${HERDR_ASSET}"
 echo "Downloading ${HERDR_URL}"
-curl -fL --retry 3 --connect-timeout 15 -o /tmp/herdr "$HERDR_URL" \
+curl -fL --retry 5 --retry-all-errors --connect-timeout 15 -o /tmp/herdr "$HERDR_URL" \
   || { echo "ERROR: download failed - check CT internet access + release asset." >&2; exit 2; }
 install -m 0755 /tmp/herdr "$HERDR_BIN"
 rm -f /tmp/herdr
 "$HERDR_BIN" --version || { echo "ERROR: herdr binary failed to execute." >&2; exit 3; }
 
 step "[4/6] ttyd web terminal binary"
+# Pinned version + direct URL (no GitHub API call needed - API has rate limits
+# and adds a DNS dependency that can fail transiently on fresh CTs)
+TTYD_VERSION="1.7.7"
 case "$ARCH" in
   x86_64)  TTYD_ASSET="ttyd.x86_64" ;;
   aarch64) TTYD_ASSET="ttyd.aarch64" ;;
 esac
-TTYD_DL=$(curl -fsSL "https://api.github.com/repos/tsl0922/ttyd/releases/latest" \
-  | grep -oE "\"browser_download_url\": \"[^\"]+/${TTYD_ASSET}\"" | cut -d'"' -f4 | head -n1)
-[[ -n "$TTYD_DL" ]] || { echo "ERROR: could not resolve ttyd asset URL (${TTYD_ASSET})." >&2; exit 4; }
-echo "Downloading ${TTYD_DL}"
-curl -fL --retry 3 --connect-timeout 15 -o /tmp/ttyd "$TTYD_DL" \
-  || { echo "ERROR: ttyd download failed from: ${TTYD_DL}" >&2; exit 4; }
+TTYD_DL="https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/${TTYD_ASSET}"
+
+# Fallback: resolve latest via API only if the pinned direct download fails
+if ! curl -fL --retry 5 --retry-all-errors --connect-timeout 15 -o /tmp/ttyd "$TTYD_DL"; then
+  echo "Pinned download failed - trying GitHub API fallback..."
+  TTYD_DL=$(curl -fsSL --retry 5 --retry-all-errors "https://api.github.com/repos/tsl0922/ttyd/releases/latest" \
+    | grep -oE "\"browser_download_url\": \"[^\"]+/${TTYD_ASSET}\"" | cut -d'"' -f4 | head -n1)
+  [[ -n "$TTYD_DL" ]] || { echo "ERROR: could not resolve ttyd asset URL (${TTYD_ASSET})." >&2; exit 4; }
+  curl -fL --retry 5 --retry-all-errors --connect-timeout 15 -o /tmp/ttyd "$TTYD_DL" \
+    || { echo "ERROR: ttyd download failed from: ${TTYD_DL}" >&2; exit 4; }
+fi
 install -m 0755 /tmp/ttyd "$TTYD_BIN"
 rm -f /tmp/ttyd
 "$TTYD_BIN" --version || { echo "ERROR: ttyd binary failed to execute." >&2; exit 5; }
