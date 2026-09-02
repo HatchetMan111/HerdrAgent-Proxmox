@@ -46,15 +46,21 @@ Install-Log — nie nur die letzte Zeile. Re-Run mit `bash -x` wird empfohlen.
 
 | Weg | Adresse | Auth |
 |---|---|---|
-| Browser (Web-Terminal) | `http://[CT-IP]:7681` | Basic-Auth `herdr:herdr` (**ändern!**) |
-| SSH (empfohlen) | `ssh root@[CT-IP]` → `herdr` | SSH-Key/Passwort |
+| Browser (Web-Terminal) | `http://[CT-IP]:7681` | Basic-Auth: **zufälliges Passwort** — wird am Ende der Installation groß ausgegeben |
+| SSH (empfohlen) | `ssh root@[CT-IP]` → `herdr` | SSH-Key (wird injiziert) oder Root-Passwort (wird ausgegeben) |
 | Proxmox | `pct enter <CT-ID>` → `herdr` | — |
 
-Basic-Auth ändern:
+Die Zugangsdaten (Web-Benutzer/Passwort, ggf. Root-Passwort) werden am Ende
+der Installation im Block **"ANMELDUNG / LOGIN"** angezeigt.
+
+Web-Credentials ändern (liegen root-only in `/etc/default/ttyd-herdr`):
 
 ```bash
-pct exec <CT-ID> -- bash -c "sed -i 's/-c herdr:herdr/-c USER:PASS/' /etc/systemd/system/ttyd.service && systemctl daemon-reload && systemctl restart ttyd"
+pct exec <CT-ID> -- bash -c 'read -p "user:pass: " C && sed -i "s/^WEB_PW=.*/WEB_PW=${C#*:}/; s/^WEB_USER=.*/WEB_USER=${C%%:*}/" /etc/default/ttyd-herdr && systemctl restart ttyd'
 ```
+
+> Hinweis: Das alte Default-Passwort `herdr:herdr` gibt es nicht mehr — jede
+> Installation bekommt ein zufälliges Passwort.
 
 ## Update
 

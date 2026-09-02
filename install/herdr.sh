@@ -264,21 +264,33 @@ for f in "${PUSH_FILES[@]}"; do
   pct push "$CT_ID" "${STAGING_DIR}/${f}" "/root/${f}" --perms 0755
 done
 
-# Random root password (guarantees SSH login even without host SSH key)
-ROOT_PW="$(tr -dc 'a-zA-Z0-9' < /dev/urandom 2>/dev/null | head -c 16 || true)"
-[[ -n "$ROOT_PW" ]] || ROOT_PW="herdr$(date +%s)"
+# Random passwords (root SSH fallback + web terminal basic auth)
+rand_pw() { tr -dc 'a-zA-Z0-9' < /dev/urandom 2>/dev/null | head -c 16; }
+ROOT_PW="$(rand_pw)"; [[ -n "$ROOT_PW" ]] || ROOT_PW="herdr$(date +%s)"
+WEB_USER="herdr"
+WEB_PW="$(rand_pw)";    [[ -n "$WEB_PW" ]]    || WEB_PW="web$(date +%s)"
 
 # ----------------------------------------------------------------------------
 # Run in-container installer
 # ----------------------------------------------------------------------------
 msg_info "Running in-container installer (apt, ssh, herdr, ttyd, systemd)..."
-if ! pct exec "$CT_ID" -- bash /root/herdr-install.sh "$HERDR_VERSION" "$ROOT_PW"; then
+CT_OUT="${DEBUG_DIR}/ct-out-$$"
+if ! pct exec "$CT_ID" -- bash /root/herdr-install.sh "$HERDR_VERSION" "$ROOT_PW" "$WEB_USER" "$WEB_PW" \
+     | tee "$CT_OUT"; then
   msg_err "In-container installer failed. Container journal (last 100 lines):"
   pct exec "$CT_ID" -- journalctl --no-pager -n 100 || true
   pct exec "$CT_ID" -- cat /root/herdr-install.log || true
   die "$LINENO" "In-container installation failed - full output above."
 fi
 msg_ok "In-container installation complete."
+
+# Read back credentials (container may have generated its own if args were empty)
+if grep -q "^HERDR_WEB_CREDENTIALS " "$CT_OUT"; then
+  CRED_LINE=$(grep "^HERDR_WEB_CREDENTIALS " "$CT_OUT" | tail -n1)
+  WEB_USER=$(echo "$CRED_LINE"  | sed -n 's/.*user=\([^ ]*\).*/\1/p')
+  WEB_PW=$(echo "$CRED_LINE"    | sed -n 's/.*password=\([^ ]*\).*/\1/p')
+  WEB_PORT=$(echo "$CRED_LINE"  | sed -n 's/.*port=\([^ ]*\).*/\1/p')
+fi
 
 # ----------------------------------------------------------------------------
 # Verification
@@ -304,11 +316,13 @@ fi
 msg_ok "herdr server is running."
 
 msg_info "Verifying web terminal (http://${CT_IP}:${WEB_PORT})..."
-HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://${CT_IP}:${WEB_PORT}/" || echo 000)
-[[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "401" ]] \
-  || { pct exec "$CT_ID" -- journalctl -u ttyd --no-pager -n 80 || true
-       die "$LINENO" "Web terminal not reachable (HTTP ${HTTP_CODE})."; }
-msg_ok "Web terminal reachable: http://${CT_IP}:${WEB_PORT} (HTTP ${HTTP_CODE})"
+HTTP_ANON=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://${CT_IP}:${WEB_PORT}/" || echo 000)
+HTTP_AUTH=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -u "${WEB_USER}:${WEB_PW}" "http://${CT_IP}:${WEB_PORT}/" || echo 000)
+if [[ "$HTTP_AUTH" != "200" ]]; then
+  pct exec "$CT_ID" -- journalctl -u ttyd --no-pager -n 80 || true
+  die "$LINENO" "Web terminal auth check failed (anon=${HTTP_ANON}, auth=${HTTP_AUTH}, expected 401/200)."
+fi
+msg_ok "Web terminal reachable + login OK: http://${CT_IP}:${WEB_PORT} (anon=${HTTP_ANON}, ${WEB_USER}:${WEB_PW} -> ${HTTP_AUTH})"
 
 msg_info "Verifying SSH daemon..."
 pct exec "$CT_ID" -- bash -c 'systemctl is-active ssh || systemctl is-active sshd' >/dev/null 2>&1 \
@@ -326,14 +340,25 @@ echo "   herdr LXC installed successfully."
 echo "  ------------------------------------------------------------"
 echo "   CT ID:         ${CT_ID}"
 echo "   CT IP:         ${CT_IP} (DHCP)"
-echo "   Web terminal:  http://${CT_IP}:${WEB_PORT}"
-echo "                  Basic-Auth: herdr / herdr  (change it! see README)"
-echo "   SSH:           ssh root@${CT_IP}"
+echo "  ------------------------------------------------------------"
+echo "   ANMELDUNG / LOGIN (bitte notieren!):"
+echo ""
+echo "     Web-Terminal:  http://${CT_IP}:${WEB_PORT}"
+echo "     Benutzer:      ${WEB_USER}"
+echo "     Passwort:      ${WEB_PW}"
+echo ""
 if [[ -n "${HOST_SSH_PUB:-}" ]]; then
-  echo "                  (host key injected: ${HOST_SSH_PUB})"
+  echo "     SSH:           ssh root@${CT_IP}   (Key: ${HOST_SSH_PUB})"
 else
-  echo "   Root password: ${ROOT_PW}   <- change: pct exec ${CT_ID} -- passwd"
+  echo "     SSH:           ssh root@${CT_IP}"
+  echo "     Root-Passwort: ${ROOT_PW}"
 fi
+echo "  ------------------------------------------------------------"
+echo "   Passwoerter aendern:"
+echo "     Web:   pct exec ${CT_ID} -- bash -c '"
+echo "            read -p \"user:pw: \" C && sed -i \"s/^WEB_PW=.*/WEB_PW=\${C#*:}/; s/^WEB_USER=.*/WEB_USER=\${C%%:*}/\" /etc/default/ttyd-herdr && systemctl restart ttyd'"
+echo "     SSH:   pct exec ${CT_ID} -- passwd"
+echo "     (Web-Credentials liegen root-only in /etc/default/ttyd-herdr)"
 echo "  ------------------------------------------------------------"
 echo "   herdr server:  pct exec ${CT_ID} -- systemctl status herdr"
 echo "   Update:        pct exec ${CT_ID} -- herdr update"

@@ -9,10 +9,18 @@ set -euo pipefail
 
 HERDR_VERSION="${1:-${HERDR_VERSION:-0.8.2}}"
 ROOT_PW="${2:-}"
+WEB_USER="${3:-herdr}"
+WEB_PW="${4:-}"
 WEB_PORT="${WEB_PORT:-7681}"
 HERDR_BIN="/usr/local/bin/herdr"
 TTYD_BIN="/usr/local/bin/ttyd"
 LOG_FILE="/root/herdr-install.log"
+
+# Random web password when none provided
+if [[ -z "$WEB_PW" ]]; then
+  WEB_PW="$(tr -dc 'a-zA-Z0-9' < /dev/urandom 2>/dev/null | head -c 16 || true)"
+  [[ -n "$WEB_PW" ]] || WEB_PW="herdr$(date +%s)"
+fi
 
 # Full debug log, always captured (complete error chains requirement)
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -86,6 +94,16 @@ ExecStartPost=/bin/sh -c 'for i in $(seq 1 15); do /usr/local/bin/herdr status >
 WantedBy=multi-user.target
 EOF
 
+# Web credentials in a root-only EnvironmentFile (NOT in the unit, which is
+# world-readable at /etc/systemd/system/ttyd.service -> 644)
+install -m 0600 /dev/null /etc/default/ttyd-herdr
+cat > /etc/default/ttyd-herdr <<EOF
+WEB_USER=${WEB_USER}
+WEB_PW=${WEB_PW}
+WEB_PORT=${WEB_PORT}
+EOF
+chmod 600 /etc/default/ttyd-herdr
+
 cat > /etc/systemd/system/ttyd.service <<EOF
 [Unit]
 Description=ttyd web terminal for herdr
@@ -98,7 +116,8 @@ Type=simple
 User=root
 Environment=HOME=/root
 Environment=TERM=xterm-256color
-ExecStart=/usr/local/bin/ttyd -W -p ${WEB_PORT} -c herdr:herdr /usr/local/bin/herdr
+EnvironmentFile=/etc/default/ttyd-herdr
+ExecStart=/bin/sh -c 'exec /usr/local/bin/ttyd -W -p "\$WEB_PORT" -c "\$WEB_USER:\$WEB_PW" /usr/local/bin/herdr'
 Restart=always
 RestartSec=3
 
@@ -119,7 +138,14 @@ systemctl is-active ttyd.service \
   || { journalctl -u ttyd --no-pager -n 50; exit 6; }
 "$HERDR_BIN" status >/dev/null 2>&1 \
   || { journalctl -u herdr --no-pager -n 50; exit 7; }
-curl -s -o /dev/null --max-time 5 "http://127.0.0.1:${WEB_PORT}/" \
-  || { journalctl -u ttyd --no-pager -n 50; exit 8; }
+# auth check: correct credentials must return 200, wrong ones 401
+CODE_OK=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -u "${WEB_USER}:${WEB_PW}" "http://127.0.0.1:${WEB_PORT}/" || echo 000)
+CODE_BAD=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -u "wrong:wrong" "http://127.0.0.1:${WEB_PORT}/" || echo 000)
+if [[ "$CODE_OK" != "200" || "$CODE_BAD" != "401" ]]; then
+  journalctl -u ttyd --no-pager -n 50
+  exit 8
+fi
 
+# Machine-readable credential line for the host script (single line, easy to parse)
+echo "HERDR_WEB_CREDENTIALS user=${WEB_USER} password=${WEB_PW} port=${WEB_PORT}"
 echo "IN-CONTAINER INSTALL OK"
