@@ -1007,6 +1007,19 @@ main {
   cursor: pointer;
 }
 
+.pane-row[draggable="true"] {
+  cursor: grab;
+}
+
+.pane-row.is-source {
+  opacity: 0.55;
+}
+
+.pane-row.is-drop-target {
+  background: var(--panel-2);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
 .pane-row.is-focused {
   background: rgba(124, 242, 168, 0.045);
 }

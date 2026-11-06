@@ -26,6 +26,7 @@ Das Dashboard ist eine dependency-freie Python-Anwendung (nur Standardbibliothek
 - **Systemwerte** des Containers: Load, RAM, Disk, Uptime
 - **systemd-Status** von `herdr`, `ttyd` und `herdr-dashboard`
 - Schnellaktionen: neues Terminal, neuer Tab, Pane fokussieren
+- **Drag & Drop**: Pane per Drag & Drop auf ein anderes Pane im selben Tab ziehen → Sortierung via `pane.swap`
 
 Alles läuft lokal im Container. Es gibt keinen Cloud-Dienst und keinen zusätzlichen TCP-Port für herdr selbst.
 

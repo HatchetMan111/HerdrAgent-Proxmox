@@ -37,6 +37,8 @@ const state = {
   lastSuccess: 0,
   offlineNotified: false,
   errors: 0,
+  draggingPaneId: null,
+  dragOverPaneId: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -437,9 +439,9 @@ function renderWorkspaces() {
                       pane.pane_id;
                     const agent = pane.display_agent || pane.agent;
                     return `
-                      <div class="pane-row status-${paneStatus} ${pane.focused ? "is-focused" : ""}"
+                      <div class="pane-row status-${paneStatus} ${pane.focused ? "is-focused" : ""} ${state.draggingPaneId === pane.pane_id ? "is-source" : ""}"
                            data-action="open-pane" data-pane-id="${escapeHtml(pane.pane_id)}"
-                           role="button" tabindex="0">
+                           draggable="true" role="button" tabindex="0">
                         <span class="pane-dot"></span>
                         <span class="pane-label">
                           ${agent ? `<span class="pane-agent">${escapeHtml(agent)}</span> · ` : ""}
@@ -734,6 +736,76 @@ function closeOverlay(name) {
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Drag & drop: pane to pane swap within a tab
+// ---------------------------------------------------------------------------
+
+function paneRowFromEvent(event) {
+  const row = event.target && typeof event.target.closest === "function"
+    ? event.target.closest(".pane-row")
+    : null;
+  const paneId = row?.dataset?.paneId || null;
+  return paneId ? { row, paneId } : null;
+}
+
+function clearDragState() {
+  state.draggingPaneId = null;
+  state.dragOverPaneId = null;
+  document.querySelectorAll(".pane-row.is-drop-target").forEach((node) => {
+    node.classList.remove("is-drop-target");
+  });
+}
+
+document.addEventListener("dragstart", (event) => {
+  const pane = paneRowFromEvent(event);
+  if (!pane) return;
+  state.draggingPaneId = pane.paneId;
+  if (event.dataTransfer) {
+    event.dataTransfer.setData("text/plain", pane.paneId);
+    event.dataTransfer.effectAllowed = "move";
+  }
+});
+
+document.addEventListener("dragover", (event) => {
+  const pane = paneRowFromEvent(event);
+  if (!pane) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  if (state.dragOverPaneId === pane.paneId) return;
+  state.dragOverPaneId = pane.paneId;
+  pane.row.classList.add("is-drop-target");
+});
+
+document.addEventListener("dragleave", (event) => {
+  const pane = paneRowFromEvent(event);
+  if (!pane || state.dragOverPaneId !== pane.paneId) return;
+  pane.row.classList.remove("is-drop-target");
+  state.dragOverPaneId = null;
+});
+
+document.addEventListener("drop", (event) => {
+  const pane = paneRowFromEvent(event);
+  event.preventDefault();
+  const source = state.draggingPaneId;
+  const target = pane?.paneId || null;
+  clearDragState();
+  if (!source || !target || source === target) return;
+
+  const sourcePane = (state.data?.snapshot?.panes || []).find(
+    (entry) => entry.pane_id === source
+  );
+  const targetPane = (state.data?.snapshot?.panes || []).find(
+    (entry) => entry.pane_id === target
+  );
+  if (!sourcePane || !targetPane || sourcePane.tab_id !== targetPane.tab_id) return;
+
+  runAction("pane.swap", { source_pane_id: source, target_pane_id: target });
+});
+
+document.addEventListener("dragend", (event) => {
+  clearDragState();
+});
 
 document.addEventListener("click", (event) => {
   const closer = event.target.closest("[data-close]");

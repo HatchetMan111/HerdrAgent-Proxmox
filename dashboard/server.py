@@ -395,6 +395,14 @@ def run_action(body: dict) -> dict:
             label = label.strip()[:120] or None
         return herdr_rpc("pane.rename", {"pane_id": pane_id, "label": label})
 
+    if action == "pane.swap":
+        source_pane_id = validate_pane_id(body.get("source_pane_id"))
+        target_pane_id = validate_pane_id(body.get("target_pane_id"))
+        return herdr_rpc(
+            "pane.swap",
+            {"source_pane_id": source_pane_id, "target_pane_id": target_pane_id},
+        )
+
     if action in {"pane.prompt", "pane.type"}:
         pane_id = validate_pane_id(body.get("pane_id"))
         text = validate_text(body.get("text"))

@@ -257,6 +257,29 @@ class ActionEnvTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.mod.run_action({"action": "tab.create", "env": {"BAD=KEY": "x"}})
 
+    def test_pane_swap_forwards_source_and_target(self):
+        self.calls.clear()
+        result = self.mod.run_action(
+            {
+                "action": "pane.swap",
+                "source_pane_id": "w1:p1",
+                "target_pane_id": "w1:p2",
+            }
+        )
+        method, params = self.calls[0]
+        self.assertEqual(method, "pane.swap")
+        self.assertEqual(params.get("source_pane_id"), "w1:p1")
+        self.assertEqual(params.get("target_pane_id"), "w1:p2")
+        self.assertEqual(result, {"ok": True})
+
+    def test_pane_swap_requires_both_pane_ids(self):
+        with self.assertRaises(ValueError):
+            self.mod.run_action({"action": "pane.swap", "source_pane_id": "w1:p1"})
+        self.calls.clear()
+        with self.assertRaises(ValueError):
+            self.mod.run_action({"action": "pane.swap", "target_pane_id": "w1:p2"})
+        self.assertEqual(self.calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()
