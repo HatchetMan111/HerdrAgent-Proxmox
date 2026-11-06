@@ -872,10 +872,15 @@ $("#workspaceForm")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const label = $("#workspaceLabel").value.trim();
   const cwd = $("#workspaceCwd").value.trim();
+  const envKey = $("#workspaceEnvKey").value.trim();
+  const payload = { label, cwd };
+  if (envKey) {
+    payload.env = { ANTHROPIC_API_KEY: envKey };
+  }
   try {
     await runAction(
       "workspace.create",
-      { label, cwd },
+      payload,
       {
         successTitle: "Workspace angelegt",
         successMessage: label ? `„${label}“ ist gestartet.` : "Neue Shell ist gestartet.",

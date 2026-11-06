@@ -19,6 +19,7 @@ DASH_PORT="${5:-8080}"
 RAW_REPO_BASE="${6:-https://raw.githubusercontent.com/HatchetMan111/HerdrAgent-Proxmox/main}"
 # Positional 7 keeps backward compatibility with older host scripts.
 WEB_PORT="${7:-${WEB_PORT:-7681}}"
+OPENROUTER_API_KEY="${8:-${OPENROUTER_API_KEY:-}}"
 HERDR_BIN="/usr/local/bin/herdr"
 TTYD_BIN="/usr/local/bin/ttyd"
 DASH_DIR="/opt/herdr-dashboard"
@@ -135,14 +136,17 @@ python3 -m py_compile "${DASH_DIR}/server.py" \
   || fail "dashboard server.py failed to compile."
 
 step "[6/8] systemd units + credentials"
-# One credentials file for both web services (root-only, not world-readable).
+# One credentials + optional OpenRouter key file for the web services (root-only, not world-readable).
 install -m 0600 /dev/null /etc/default/herdr-web
-cat > /etc/default/herdr-web <<EOF
-WEB_USER=${WEB_USER}
-WEB_PW=${WEB_PW}
-WEB_PORT=${WEB_PORT}
-DASH_PORT=${DASH_PORT}
-EOF
+{
+  echo "WEB_USER=${WEB_USER}"
+  echo "WEB_PW=${WEB_PW}"
+  echo "WEB_PORT=${WEB_PORT}"
+  echo "DASH_PORT=${DASH_PORT}"
+  if [[ -n "${OPENROUTER_API_KEY}" ]]; then
+    echo "OPENROUTER_API_KEY=${OPENROUTER_API_KEY}"
+  fi
+} > /etc/default/herdr-web
 chmod 600 /etc/default/herdr-web
 # Remove the pre-1.0 credentials file; both units now read herdr-web.
 rm -f /etc/default/ttyd-herdr
@@ -158,6 +162,7 @@ Type=simple
 User=root
 Environment=HOME=/root
 Environment=TERM=xterm-256color
+EnvironmentFile=/etc/default/herdr-web
 ExecStart=/usr/local/bin/herdr server
 Restart=always
 RestartSec=3

@@ -311,6 +311,11 @@
         <span>Arbeitsverzeichnis <small>(optional)</small></span>
         <input type="text" id="workspaceCwd" maxlength="500" placeholder="/root" autocomplete="off" spellcheck="false">
       </label>
+      <label class="field">
+        <span>OpenRouter API-Key <small>(optional)</small></span>
+        <input type="password" id="workspaceEnvKey" maxlength="256" placeholder="sk-or-…" autocomplete="off" spellcheck="false">
+        <small class="hint">Für Agenten via OpenRouter (z. B. Claude-Code-Modelle über openrouter.ai). Leer lassen = Installer-Schlüssel.</small>
+      </label>
       <footer class="dialog-actions">
         <button class="btn" type="button" data-close="workspace">Abbrechen</button>
         <button class="btn primary" type="submit"><svg><use href="#i-plus"/></svg>Anlegen</button>

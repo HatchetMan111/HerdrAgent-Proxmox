@@ -18,6 +18,9 @@ Configuration is read from the environment (systemd EnvironmentFile):
   WEB_PORT                 ttyd port, used for the "open terminal" link
   HERDR_BIN                herdr binary path
   HERDR_SOCKET_PATH        alternative socket path
+  OPENROUTER_API_KEY       optional install-time OpenRouter API key
+  OPENROUTER_BASE_URL      optional OpenRouter base URL (default https://openrouter.ai/api/v1)
+  OPENROUTER_MODEL          optional OpenRouter model (ANTHROPIC_MODEL)
 
 Only Python's standard library is used.
 """
@@ -55,6 +58,13 @@ HERDR_HOME = os.environ.get("HERDR_HOME") or os.path.join(
 SOCKET_PATH = os.environ.get("HERDR_SOCKET_PATH") or os.path.join(
     HERDR_HOME, "herdr.sock"
 )
+
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or ""
+OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL") or ""
+ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+ENV_VALUE_MAX_CHARS = 512
+ENV_MAX_KEYS = 10
 
 MAX_BODY_BYTES = 64 * 1024
 MAX_READ_LINES = 500
@@ -298,6 +308,60 @@ def validate_pane_id(value: object) -> str:
     return value
 
 
+def openrouter_env() -> dict:
+    """Launch env for new panes from the install-time OpenRouter key."""
+    key = OPENROUTER_API_KEY or ""
+    if not key.strip():
+        return {}
+    env = {
+        "ANTHROPIC_BASE_URL": OPENROUTER_BASE_URL,
+        "ANTHROPIC_API_KEY": key.strip(),
+    }
+    if OPENROUTER_MODEL.strip():
+        env["ANTHROPIC_MODEL"] = OPENROUTER_MODEL.strip()
+    return env
+
+
+def launch_env_for(requested: dict) -> dict:
+    """Merge requested env entries over the install-time OpenRouter defaults."""
+    env = dict(openrouter_env())
+    api_key = (requested.get("ANTHROPIC_API_KEY") or "").strip()
+    base_url = (requested.get("ANTHROPIC_BASE_URL") or OPENROUTER_BASE_URL).strip()
+    model = (requested.get("ANTHROPIC_MODEL") or OPENROUTER_MODEL).strip()
+    if api_key:
+        env = {
+            "ANTHROPIC_BASE_URL": base_url,
+            "ANTHROPIC_API_KEY": api_key,
+        }
+        if model:
+            env["ANTHROPIC_MODEL"] = model
+    extra = {
+        key: value
+        for key, value in requested.items()
+        if key not in {"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL"}
+    }
+    env.update(extra)
+    return env
+
+
+def validate_env(value: object) -> dict:
+    """Normalize an optional per-request env map for pane/workspace/tab creation."""
+    if not isinstance(value, dict) or not value:
+        return {}
+    if len(value) > ENV_MAX_KEYS:
+        raise ValueError("env supports at most 10 keys")
+    result: dict = {}
+    for key, val in value.items():
+        if not isinstance(key, str) or not ENV_KEY_RE.match(key):
+            raise ValueError("invalid env key")
+        if not isinstance(val, str) or not val.strip():
+            raise ValueError(f"env value for {key} must not be empty")
+        if len(val) > ENV_VALUE_MAX_CHARS:
+            raise ValueError(f"env value for {key} is too long")
+        result[key] = val
+    return result
+
+
 def validate_text(value: object, field: str = "text", limit: int = 16000) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{field} must be a string")
@@ -388,6 +452,9 @@ def run_action(body: dict) -> dict:
             if not cwd.strip().startswith("/"):
                 raise ValueError("cwd must be an absolute path")
             params["cwd"] = cwd.strip()
+        launch_env = launch_env_for(validate_env(body.get("env")))
+        if launch_env:
+            params["env"] = launch_env
         return herdr_rpc("workspace.create", params)
 
     if action == "workspace.focus":
@@ -413,6 +480,9 @@ def run_action(body: dict) -> dict:
             params["label"] = label.strip()[:120]
         if isinstance(workspace_id, str) and PANE_ID_RE.match(workspace_id):
             params["workspace_id"] = workspace_id
+        launch_env = launch_env_for(validate_env(body.get("env")))
+        if launch_env:
+            params["env"] = launch_env
         return herdr_rpc("tab.create", params)
 
     if action == "tab.focus":

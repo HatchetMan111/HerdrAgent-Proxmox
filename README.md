@@ -68,6 +68,7 @@ Das Script fragt CT-ID, vCPU, RAM und Disk interaktiv ab. Für unbeaufsichtigte 
 | `WEB_PORT` | `7681` | ttyd-Port |
 | `DASH_PORT` | `8080` | Dashboard-Port |
 | `TRACE` | `0` | `1` aktiviert `bash -x` |
+| `OPENROUTER_KEY` | *(leer)* | optionaler OpenRouter API-Key für Agenten (siehe [Agenten & OpenRouter](#agenten--openrouter)) |
 
 Beispiel:
 
@@ -121,6 +122,49 @@ pct exec CT-ID -- bash -c '
 ### Hinter HTTPS / Reverse Proxy
 
 Für Zugriff von außen bitte nicht die Ports direkt ins Internet stellen. Beispiele für Caddy und nginx (inkl. WebSocket für ttyd) stehen in [docs/reverse-proxy.md](docs/reverse-proxy.md).
+
+---
+
+## Agenten & OpenRouter
+
+Headless im Container laufende Agents brauchen einen LLM-API-Key. Der Installer unterstützt das optional über **OpenRouter**.
+
+### Einmalig beim Install (interaktiv)
+
+Beim ersten Lauf des Installations-Scripts wird (bei interaktiver Ausführung) optional gefragt:
+
+```
+OpenRouter API-Key (optional, fuer Agenten via OpenRouter):
+```
+
+Der Key wird im Container unter `/etc/default/herdr-web` (`OPENROUTER_API_KEY=…`) gespeichert und über die systemd-Unit `herdr.service` (`EnvironmentFile=/etc/default/herdr-web`) an den Server weitergegeben. Alle neu gestarteten Agenten/Panes erhalten damit automatisch:
+
+```
+ANTHROPIC_BASE_URL=https://openrouter.ai/api/v1
+ANTHROPIC_API_KEY=<dein-Key>
+```
+
+(optional über `OPENROUTER_MODEL` auch `ANTHROPIC_MODEL`).
+
+### Über das Dashboard (optional, pro Workspace)
+
+Beim Anlegen eines Workspaces über das Dashboard (`Neues Terminal`) kann optional ein **OpenRouter API-Key** eingetragen werden. Dieser wird beim Anlegen an den Server übergeben (`workspace.create` → `env`) und wirkt sich auf den frischen Workspace/Pane aus.
+
+Fehlt der Key im Dashboard, nutzt der Server den im Install-Script hinterlegten Key.
+
+### CLI (einzelner Agent / Split)
+
+Alternativ über die herdr-CLI mit `--env KEY=VALUE` (wiederholbar):
+
+```bash
+pct exec CT-ID -- herdr tab create --env ANTHROPIC_API_KEY=<key> --env ANTHROPIC_BASE_URL=https://openrouter.ai/api/v1
+```
+
+oder für einen neuen Pane in einem bestehenden Workspace:
+
+```bash
+pct exec CT-ID -- herdr pane split --env ANTHROPIC_API_KEY=<key>
+```
 
 ---
 

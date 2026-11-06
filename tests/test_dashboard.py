@@ -155,5 +155,108 @@ class RpcTests(unittest.TestCase):
                 thread.join(timeout=2)
 
 
+class LaunchEnvTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = load_server_module()
+
+    def setUp(self):
+        self.saved = {
+            name: getattr(self.mod, name, None)
+            for name in ("OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENROUTER_MODEL")
+        }
+
+    def tearDown(self):
+        for name, value in self.saved.items():
+            setattr(self.mod, name, value)
+
+    def test_openrouter_env_from_install_key(self):
+        mod = self.mod
+        mod.OPENROUTER_API_KEY = "sk-or-install"
+        mod.OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+        mod.OPENROUTER_MODEL = "anthropic/claude-sonnet-4.5"
+        env = mod.openrouter_env()
+        self.assertEqual(env.get("ANTHROPIC_API_KEY"), "sk-or-install")
+        self.assertEqual(env.get("ANTHROPIC_BASE_URL"), "https://openrouter.ai/api/v1")
+        self.assertEqual(env.get("ANTHROPIC_MODEL"), "anthropic/claude-sonnet-4.5")
+
+    def test_openrouter_env_empty_without_key(self):
+        self.mod.OPENROUTER_API_KEY = ""
+        self.assertEqual(self.mod.openrouter_env(), {})
+
+    def test_launch_env_uses_install_key_when_no_request(self):
+        self.mod.OPENROUTER_API_KEY = "sk-or-install"
+        env = self.mod.launch_env_for({})
+        self.assertEqual(env.get("ANTHROPIC_API_KEY"), "sk-or-install")
+        self.assertEqual(env.get("ANTHROPIC_BASE_URL"), "https://openrouter.ai/api/v1")
+
+    def test_launch_env_prefers_requested_key(self):
+        self.mod.OPENROUTER_API_KEY = "sk-or-install"
+        env = self.mod.launch_env_for(
+            {"ANTHROPIC_API_KEY": "sk-or-user", "ANTHROPIC_MODEL": "openai/gpt-4o"}
+        )
+        self.assertEqual(env.get("ANTHROPIC_API_KEY"), "sk-or-user")
+        self.assertEqual(env.get("ANTHROPIC_BASE_URL"), "https://openrouter.ai/api/v1")
+        self.assertEqual(env.get("ANTHROPIC_MODEL"), "openai/gpt-4o")
+
+    def test_validate_env_rejects_bad_keys_and_limits(self):
+        self.assertEqual(self.mod.validate_env(None), {})
+        self.assertEqual(self.mod.validate_env({}), {})
+        self.assertEqual(
+            self.mod.validate_env({"ANTHROPIC_API_KEY": "sk-or-x"}),
+            {"ANTHROPIC_API_KEY": "sk-or-x"},
+        )
+        with self.assertRaises(ValueError):
+            self.mod.validate_env({"BAD=KEY": "x"})
+        with self.assertRaises(ValueError):
+            self.mod.validate_env({"OPENROUTER_API_KEY": ""})
+        with self.assertRaises(ValueError):
+            self.mod.validate_env({f"K{i}": "v" for i in range(11)})
+
+
+class ActionEnvTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = load_server_module()
+
+    def setUp(self):
+        self.calls = []
+        self.mod.herdr_rpc = lambda method, params=None: (
+            self.calls.append((method, params)) or {"ok": True}
+        )
+
+    def test_workspace_create_forwards_openrouter_env(self):
+        mod = self.mod
+        mod.OPENROUTER_API_KEY = "sk-or-install"
+        result = mod.run_action({"action": "workspace.create", "label": "test"})
+        method, params = self.calls[0]
+        self.assertEqual(method, "workspace.create")
+        self.assertEqual(params.get("focus"), True)
+        self.assertEqual(params.get("env", {}).get("ANTHROPIC_API_KEY"), "sk-or-install")
+        self.assertEqual(result, {"ok": True})
+
+    def test_workspace_create_uses_requested_env(self):
+        self.calls.clear()
+        self.mod.run_action(
+            {"action": "workspace.create", "label": "test", "env": {"ANTHROPIC_API_KEY": "sk-or-user"}}
+        )
+        method, params = self.calls[0]
+        self.assertEqual(method, "workspace.create")
+        self.assertEqual(params["env"]["ANTHROPIC_API_KEY"], "sk-or-user")
+
+    def test_tab_create_forwards_openrouter_env(self):
+        self.calls.clear()
+        self.mod.OPENROUTER_API_KEY = "sk-or-install"
+        self.mod.run_action({"action": "tab.create"})
+        method, params = self.calls[0]
+        self.assertEqual(method, "tab.create")
+        self.assertEqual(params.get("focus"), True)
+        self.assertEqual(params.get("env", {}).get("ANTHROPIC_API_KEY"), "sk-or-install")
+
+    def test_tab_create_rejects_invalid_env(self):
+        with self.assertRaises(ValueError):
+            self.mod.run_action({"action": "tab.create", "env": {"BAD=KEY": "x"}})
+
+
 if __name__ == "__main__":
     unittest.main()

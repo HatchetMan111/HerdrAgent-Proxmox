@@ -22,6 +22,7 @@ CT_HOSTNAME="herdr"
 CT_DISK_STORE="${CT_DISK_STORE:-local-lvm}"   # Proxmox storage for the CT disk
 WEB_PORT="${WEB_PORT:-7681}"                  # ttyd web terminal port
 DASH_PORT="${DASH_PORT:-8080}"                # herdr web dashboard port
+OPENROUTER_KEY="${OPENROUTER_KEY:-}"        # optional OpenRouter API-Key (OpenRouter)
 PUSH_FILES=(herdr-install.sh)
 DASHBOARD_FILES=(
   dashboard/server.py
@@ -117,6 +118,10 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   read -rp "Cores [2]: " CT_CORES
   read -rp "RAM in MiB [2048]: " CT_RAM
   read -rp "Disk in GiB [8]: " CT_DISK
+  read -rp "OpenRouter API-Key (optional, fuer Agenten via OpenRouter): " OPENROUTER_KEY_PROMPT
+  if [[ -n "${OPENROUTER_KEY_PROMPT:-}" ]]; then
+    OPENROUTER_KEY="${OPENROUTER_KEY_PROMPT}"
+  fi
 fi
 CT_ID="${CT_ID:-$DEFAULT_CT_ID}"
 CT_CORES="${CT_CORES:-2}"
@@ -341,6 +346,15 @@ if [[ "$EXISTING_CT" == "yes" ]]; then
 fi
 [[ -n "$WEB_PW" ]] || WEB_PW="$(rand_pw)"
 
+# Re-runs must not lose an existing OpenRouter key: reuse it from the
+# credentials file written by the in-container installer.
+if [[ "${EXISTING_CT:-no}" == "yes" && -z "${OPENROUTER_KEY:-}" ]]; then
+  OPENROUTER_KEY="$(pct exec "$CT_ID" -- sed -n 's/^OPENROUTER_API_KEY=//p' /etc/default/herdr-web 2>/dev/null || true)"
+fi
+if [[ -n "${OPENROUTER_KEY:-}" ]]; then
+  msg_ok "Reusing existing OpenRouter API key from /etc/default/herdr-web."
+fi
+
 # ----------------------------------------------------------------------------
 # Run in-container installer
 # ----------------------------------------------------------------------------
@@ -350,6 +364,7 @@ CT_OUT="${DEBUG_DIR}/ct-out-$$"
 set +e
 pct exec "$CT_ID" -- bash /root/herdr-install.sh \
   "$HERDR_VERSION" "$ROOT_PW" "$WEB_USER" "$WEB_PW" "$DASH_PORT" "$RAW_REPO_BASE" "$WEB_PORT" \
+  "$OPENROUTER_KEY" \
   2>&1 | tee "$CT_OUT"
 CT_RC=${PIPESTATUS[0]}
 set -e
@@ -442,6 +457,12 @@ echo "     Web-Dashboard: http://${CT_IP}:${DASH_PORT}"
 echo "     Web-Terminal:  http://${CT_IP}:${WEB_PORT}"
 echo "     Benutzer:      ${WEB_USER}"
 echo "     Passwort:      ${WEB_PW}"
+echo ""
+if [[ -n "${OPENROUTER_KEY:-}" ]]; then
+  echo "     OpenRouter:    API-Key hinterlegt - neue Agenten starten damit (Claude Code via OpenRouter)."
+else
+  echo "     OpenRouter:    kein API-Key hinterlegt - optional im Dashboard bei der Workspace-Anlage eingetragen."
+fi
 echo ""
 if [[ -n "${HOST_SSH_PUB:-}" ]]; then
   echo "     SSH:           ssh root@${CT_IP}   (Key: ${HOST_SSH_PUB})"
