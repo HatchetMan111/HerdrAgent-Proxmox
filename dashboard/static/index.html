@@ -316,6 +316,16 @@
         <input type="password" id="workspaceEnvKey" maxlength="256" placeholder="sk-or-…" autocomplete="off" spellcheck="false">
         <small class="hint">Für Agenten via OpenRouter (z. B. Claude-Code-Modelle über openrouter.ai). Leer lassen = Installer-Schlüssel.</small>
       </label>
+      <label class="field">
+        <span>OpenRouter Modell <small>(optional)</small></span>
+        <input type="text" id="workspaceEnvModel" maxlength="200" placeholder="z. B. anthropic/claude-sonnet-4.6" autocomplete="off" spellcheck="false">
+        <small class="hint">Leer lassen = OpenRouter Default. Der Installer kann zusätzlich einen Modell-Standard setzen.</small>
+      </label>
+      <label class="field">
+        <span>OpenRouter Base URL <small>(optional)</small></span>
+        <input type="text" id="workspaceEnvBaseUrl" maxlength="300" placeholder="https://openrouter.ai/api/v1" autocomplete="off" spellcheck="false">
+        <small class="hint">OpenAI-kompatible Endpunkt-URL. Leer lassen = https://openrouter.ai/api/v1.</small>
+      </label>
       <footer class="dialog-actions">
         <button class="btn" type="button" data-close="workspace">Abbrechen</button>
         <button class="btn primary" type="submit"><svg><use href="#i-plus"/></svg>Anlegen</button>

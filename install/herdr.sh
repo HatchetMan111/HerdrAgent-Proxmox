@@ -23,6 +23,8 @@ CT_DISK_STORE="${CT_DISK_STORE:-local-lvm}"   # Proxmox storage for the CT disk
 WEB_PORT="${WEB_PORT:-7681}"                  # ttyd web terminal port
 DASH_PORT="${DASH_PORT:-8080}"                # herdr web dashboard port
 OPENROUTER_KEY="${OPENROUTER_KEY:-}"        # optional OpenRouter API-Key (OpenRouter)
+OPENROUTER_MODEL="${OPENROUTER_MODEL:-}"    # optional OpenRouter-Modell (ANTHROPIC_MODEL), leer = OpenRouter Default
+HERDR_PLUGINS="${HERDR_PLUGINS:-aemrebarut/herdr-dagr devswha/ovis}"  # space-separated: owner/repo[/subdir] community plugins
 PUSH_FILES=(herdr-install.sh)
 DASHBOARD_FILES=(
   dashboard/server.py
@@ -118,9 +120,15 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   read -rp "Cores [2]: " CT_CORES
   read -rp "RAM in MiB [2048]: " CT_RAM
   read -rp "Disk in GiB [8]: " CT_DISK
-  read -rp "OpenRouter API-Key (optional, fuer Agenten via OpenRouter): " OPENROUTER_KEY_PROMPT
+  # read -rp from a TTY is interruptible (Ctrl+C aborts the script cleanly);
+  # the key is only stored when the user actually enters one.
+  read -rp "OpenRouter API-Key (optional, fuer Agenten via OpenRouter, Enter = ueberspringen): " OPENROUTER_KEY_PROMPT
   if [[ -n "${OPENROUTER_KEY_PROMPT:-}" ]]; then
     OPENROUTER_KEY="${OPENROUTER_KEY_PROMPT}"
+  fi
+  read -rp "OpenRouter Modell (optional, z.B. anthropic/claude-sonnet-4.6; Leer = OpenRouter Default): " OPENROUTER_MODEL_PROMPT
+  if [[ -n "${OPENROUTER_MODEL_PROMPT:-}" ]]; then
+    OPENROUTER_MODEL="${OPENROUTER_MODEL_PROMPT}"
   fi
 fi
 CT_ID="${CT_ID:-$DEFAULT_CT_ID}"
@@ -364,7 +372,7 @@ CT_OUT="${DEBUG_DIR}/ct-out-$$"
 set +e
 pct exec "$CT_ID" -- bash /root/herdr-install.sh \
   "$HERDR_VERSION" "$ROOT_PW" "$WEB_USER" "$WEB_PW" "$DASH_PORT" "$RAW_REPO_BASE" "$WEB_PORT" \
-  "$OPENROUTER_KEY" \
+  "$OPENROUTER_KEY" "$OPENROUTER_MODEL" "$HERDR_PLUGINS" \
   2>&1 | tee "$CT_OUT"
 CT_RC=${PIPESTATUS[0]}
 set -e
@@ -462,6 +470,12 @@ if [[ -n "${OPENROUTER_KEY:-}" ]]; then
   echo "     OpenRouter:    API-Key hinterlegt - neue Agenten starten damit (Claude Code via OpenRouter)."
 else
   echo "     OpenRouter:    kein API-Key hinterlegt - optional im Dashboard bei der Workspace-Anlage eingetragen."
+fi
+if [[ -n "${OPENROUTER_MODEL:-}" ]]; then
+  echo "     OpenRouter-Modell: ${OPENROUTER_MODEL} (leer = OpenRouter Default)."
+fi
+if [[ -n "${HERDR_PLUGINS:-}" ]]; then
+  echo "     Community-Plugins: ${HERDR_PLUGINS}"
 fi
 echo ""
 if [[ -n "${HOST_SSH_PUB:-}" ]]; then

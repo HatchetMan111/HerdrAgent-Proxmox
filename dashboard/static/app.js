@@ -945,9 +945,21 @@ $("#workspaceForm")?.addEventListener("submit", async (event) => {
   const label = $("#workspaceLabel").value.trim();
   const cwd = $("#workspaceCwd").value.trim();
   const envKey = $("#workspaceEnvKey").value.trim();
+  const envModel = $("#workspaceEnvModel").value.trim();
+  const envBaseUrl = $("#workspaceEnvBaseUrl").value.trim();
   const payload = { label, cwd };
+  const env = {};
   if (envKey) {
-    payload.env = { ANTHROPIC_API_KEY: envKey };
+    env.ANTHROPIC_API_KEY = envKey;
+  }
+  if (envModel) {
+    env.ANTHROPIC_MODEL = envModel;
+  }
+  if (envBaseUrl) {
+    env.ANTHROPIC_BASE_URL = envBaseUrl;
+  }
+  if (Object.keys(env).length) {
+    payload.env = env;
   }
   try {
     await runAction(

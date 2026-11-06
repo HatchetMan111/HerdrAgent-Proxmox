@@ -4,7 +4,12 @@
 #
 # Called by the Proxmox host script via:
 #   pct exec <ctid> -- bash /root/herdr-install.sh \
-#       <HERDR_VERSION> <ROOT_PW> <WEB_USER> <WEB_PW> <DASH_PORT> <RAW_REPO_BASE> <WEB_PORT>
+#       <HERDR_VERSION> <ROOT_PW> <WEB_USER> <WEB_PW> <DASH_PORT> <RAW_REPO_BASE> <WEB_PORT> \
+#       <OPENROUTER_API_KEY> <OPENROUTER_MODEL> <HERDR_PLUGINS>
+#
+# <OPENROUTER_API_KEY>  optional OpenRouter API-Key
+# <OPENROUTER_MODEL>    optional OpenRouter model (ANTHROPIC_MODEL), leer = OpenRouter default
+# <HERDR_PLUGINS>        space-separated GitHub sources owner/repo[/subdir] for community plugins
 #
 # Idempotent: safe to re-run. Existing config, credentials and services are
 # updated in place.
@@ -20,6 +25,8 @@ RAW_REPO_BASE="${6:-https://raw.githubusercontent.com/HatchetMan111/HerdrAgent-P
 # Positional 7 keeps backward compatibility with older host scripts.
 WEB_PORT="${7:-${WEB_PORT:-7681}}"
 OPENROUTER_API_KEY="${8:-${OPENROUTER_API_KEY:-}}"
+OPENROUTER_MODEL="${9:-${OPENROUTER_MODEL:-}}"
+HERDR_PLUGINS="${10:-${HERDR_PLUGINS:-aemrebarut/herdr-dagr devswha/ovis}}"
 HERDR_BIN="/usr/local/bin/herdr"
 TTYD_BIN="/usr/local/bin/ttyd"
 DASH_DIR="/opt/herdr-dashboard"
@@ -47,7 +54,7 @@ fail() {
   exit 1
 }
 
-step "[1/8] apt update + base packages"
+step "[1/10] apt update + base packages"
 export DEBIAN_FRONTEND=noninteractive
 
 # DNS readiness check (fresh CTs can have transient DNS failures right after DHCP)
@@ -67,7 +74,7 @@ apt-get install -y -qq curl wget ca-certificates openssh-server \
   python3 git ripgrep iproute2 procps less nano jq
 
 # --- SSH setup: enable root login with password (fresh CT has no root pw) ---
-step "[2/8] SSH daemon + root access"
+step "[2/10] SSH daemon + root access"
 sed -i -E 's/^#?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 sed -i -E 's/^#?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
 if [[ -n "$ROOT_PW" ]]; then
@@ -76,7 +83,7 @@ fi
 systemctl enable ssh >/dev/null 2>&1 || systemctl enable sshd >/dev/null 2>&1 || true
 systemctl restart ssh 2>/dev/null || systemctl restart sshd
 
-step "[3/8] herdr binary ${HERDR_VERSION}"
+step "[3/10] herdr binary ${HERDR_VERSION}"
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)  HERDR_ASSET="herdr-linux-x86_64" ;;
@@ -91,7 +98,7 @@ install -m 0755 /tmp/herdr "$HERDR_BIN"
 rm -f /tmp/herdr
 "$HERDR_BIN" --version || fail "herdr binary failed to execute."
 
-step "[4/8] ttyd web terminal binary"
+step "[4/10] ttyd web terminal binary"
 # Pinned version + direct URL (no GitHub API call needed - API has rate limits
 # and adds a DNS dependency that can fail transiently on fresh CTs)
 TTYD_VERSION="1.7.7"
@@ -114,7 +121,7 @@ install -m 0755 /tmp/ttyd "$TTYD_BIN"
 rm -f /tmp/ttyd
 "$TTYD_BIN" --version || fail "ttyd binary failed to execute."
 
-step "[5/8] dashboard assets"
+step "[5/10] dashboard assets"
 # The host installer normally pushes these files. When this script is run
 # standalone (or a push was skipped), fetch the missing files from the repo.
 mkdir -p "${DASH_DIR}/static"
@@ -135,7 +142,39 @@ chmod 0644 "${DASH_DIR}"/static/*
 python3 -m py_compile "${DASH_DIR}/server.py" \
   || fail "dashboard server.py failed to compile."
 
-step "[6/8] systemd units + credentials"
+step "[6/10] bun runtime + community plugins"
+# Bun is required by the herdr TUI plugin builds (e.g. ovis) and by shepherdr's web app build.
+if ! command -v bun >/dev/null 2>&1; then
+  echo "Installing bun (https://bun.sh/install)..."
+  curl -fsSL --retry 3 --retry-all-errors --connect-timeout 15 https://bun.sh/install | bash
+fi
+mkdir -p /root/.bun
+export PATH="/root/.bun/bin:${PATH}"
+[[ -x /root/.bun/bin/bun ]] || fail "bun is still missing at /root/.bun/bin/bun."
+
+# Community plugins via the herdr plugin manager (GitHub sources: owner/repo[/subdir]).
+# Unset/empty HERDR_PLUGINS means "no extra plugins beyond the defaults".
+# shellcheck disable=SC2086  # HERDR_PLUGINS is a space-separated list on purpose
+for plugin in ${HERDR_PLUGINS:-}; do
+  [[ -n "${plugin}" ]] || continue
+  step "community plugin: ${plugin}"
+  "$HERDR_BIN" plugin install --yes "${plugin}" \
+    || fail "community plugin install failed: ${plugin}"
+done
+
+step "[7/10] shepherdr (mission control: background work + web app)"
+SHEPHERDR_DIR="/opt/shepherdr"
+if [[ ! -f "${SHEPHERDR_DIR}/install.sh" ]]; then
+  git clone --depth 1 https://github.com/eliasstravik/shepherdr.git "${SHEPHERDR_DIR}"
+fi
+if [[ ! -x "${SHEPHERDR_DIR}/install.sh" ]]; then
+  fail "shepherdr checkout is missing its installer: ${SHEPHERDR_DIR}/install.sh"
+fi
+if ! (cd "${SHEPHERDR_DIR}" && ./install.sh --web --yes); then
+  echo "WARN: shepherdr web install failed - the core herdr stack continues without it." >&2
+fi
+
+step "[8/10] systemd units + credentials"
 # One credentials + optional OpenRouter key file for the web services (root-only, not world-readable).
 install -m 0600 /dev/null /etc/default/herdr-web
 {
@@ -145,6 +184,9 @@ install -m 0600 /dev/null /etc/default/herdr-web
   echo "DASH_PORT=${DASH_PORT}"
   if [[ -n "${OPENROUTER_API_KEY}" ]]; then
     echo "OPENROUTER_API_KEY=${OPENROUTER_API_KEY}"
+  fi
+  if [[ -n "${OPENROUTER_MODEL}" ]]; then
+    echo "OPENROUTER_MODEL=${OPENROUTER_MODEL}"
   fi
 } > /etc/default/herdr-web
 chmod 600 /etc/default/herdr-web
@@ -162,6 +204,8 @@ Type=simple
 User=root
 Environment=HOME=/root
 Environment=TERM=xterm-256color
+# Bun lives in /root/.bun/bin and is needed by TUI plugin builds (e.g. ovis) and by shepherdr's web app build.
+Environment=PATH=/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=/etc/default/herdr-web
 ExecStart=/usr/local/bin/herdr server
 Restart=always
@@ -220,7 +264,7 @@ systemctl restart herdr.service
 systemctl restart ttyd.service
 systemctl restart herdr-dashboard.service
 
-step "[7/8] service status"
+step "[9/10] service status"
 sleep 4
 systemctl is-active herdr.service \
   || { journalctl -u herdr --no-pager -n 50; exit 6; }
@@ -231,7 +275,7 @@ systemctl is-active herdr-dashboard.service \
 "$HERDR_BIN" status >/dev/null 2>&1 \
   || { journalctl -u herdr --no-pager -n 50; exit 7; }
 
-step "[8/8] self-check"
+step "[10/10] self-check"
 # ttyd auth: correct credentials must return 200, wrong ones 401
 CODE_OK=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -u "${WEB_USER}:${WEB_PW}" "http://127.0.0.1:${WEB_PORT}/" || echo 000)
 CODE_BAD=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -u "wrong:wrong" "http://127.0.0.1:${WEB_PORT}/" || echo 000)

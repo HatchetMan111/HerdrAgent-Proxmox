@@ -70,6 +70,8 @@ Das Script fragt CT-ID, vCPU, RAM und Disk interaktiv ab. Für unbeaufsichtigte 
 | `DASH_PORT` | `8080` | Dashboard-Port |
 | `TRACE` | `0` | `1` aktiviert `bash -x` |
 | `OPENROUTER_KEY` | *(leer)* | optionaler OpenRouter API-Key für Agenten (siehe [Agenten & OpenRouter](#agenten--openrouter)) |
+| `OPENROUTER_MODEL` | *(leer)* | OpenRouter-Modell für `ANTHROPIC_MODEL` (leer = OpenRouter Default) |
+| `HERDR_PLUGINS` | `aemrebarut/herdr-dagr devswha/ovis` | space-separated Community-Plugin-Quellen `owner/repo[/subdir]` |
 
 Beispiel:
 
@@ -88,6 +90,10 @@ CT_ID=120 CT_CORES=4 CT_RAM=4096 HERDR_VERSION=latest \
    - Python 3, git, ripgrep und Basis-Tools
    - Dashboard nach `/opt/herdr-dashboard`
    - systemd-Units `herdr.service`, `ttyd.service`, `herdr-dashboard.service`
+   - bun (für TUI-Plugin-Builds und die shepherdr-Web-App)
+   - Community-Plugins via `herdr plugin install --yes <owner>/<repo>[/subdir]`
+     (Default: `aemrebarut/herdr-dagr`, `devswha/ovis`; Quelle: <https://herdr.dev/tui/plugins/>)
+   - shepherdr (Mission Control: Background-Work + Web-App, via `install.sh --web`)
 4. Verifiziert automatisch:
    - `systemctl is-active herdr ttyd herdr-dashboard`
    - `herdr status`
@@ -132,24 +138,31 @@ Headless im Container laufende Agents brauchen einen LLM-API-Key. Der Installer 
 
 ### Einmalig beim Install (interaktiv)
 
-Beim ersten Lauf des Installations-Scripts wird (bei interaktiver Ausführung) optional gefragt:
+Beim ersten Lauf des Installations-Scripts wird (bei interaktiver Ausführung mit TTY) optional gefragt:
 
 ```
-OpenRouter API-Key (optional, fuer Agenten via OpenRouter):
+OpenRouter API-Key (optional, fuer Agenten via OpenRouter, Enter = ueberspringen):
+OpenRouter Modell (optional, z. B. anthropic/claude-sonnet-4.6; Leer = OpenRouter Default):
 ```
 
-Der Key wird im Container unter `/etc/default/herdr-web` (`OPENROUTER_API_KEY=…`) gespeichert und über die systemd-Unit `herdr.service` (`EnvironmentFile=/etc/default/herdr-web`) an den Server weitergegeben. Alle neu gestarteten Agenten/Panes erhalten damit automatisch:
+- **Enter** bei Key und Modell = überspringen (Key leer → kein OpenRouter-Lauf).
+- **Strg+C** bricht die Abfrage sauber ab – das Install bricht dann ohne Key-Setzung ab.
+- Der Key wird im Container unter `/etc/default/herdr-web` (`OPENROUTER_API_KEY=…`) gespeichert und über die systemd-Unit `herdr.service` (`EnvironmentFile=/etc/default/herdr-web`) an den Server weitergegeben. Alle neu gestarteten Agenten/Panes erhalten damit automatisch:
 
 ```
 ANTHROPIC_BASE_URL=https://openrouter.ai/api/v1
 ANTHROPIC_API_KEY=<dein-Key>
+ANTHROPIC_MODEL=<optional>
 ```
 
-(optional über `OPENROUTER_MODEL` auch `ANTHROPIC_MODEL`).
+- Über `OPENROUTER_MODEL` (im Install oder via Dashboard) wird zusätzlich ein Modell als Standard gesetzt; leer = OpenRouter Default. Mit dem Key sind damit **alle OpenRouter-Modelle** nutzbar, die OpenRouter für die Agenten freigibt.
 
 ### Über das Dashboard (optional, pro Workspace)
 
-Beim Anlegen eines Workspaces über das Dashboard (`Neues Terminal`) kann optional ein **OpenRouter API-Key** eingetragen werden. Dieser wird beim Anlegen an den Server übergeben (`workspace.create` → `env`) und wirkt sich auf den frischen Workspace/Pane aus.
+Beim Anlegen eines Workspaces über das Dashboard (`Neues Terminal`) kann optional ein **OpenRouter API-Key**, ein **Modell** und eine **Base URL** eingetragen werden. Diese werden beim Anlegen an den Server übergeben (`workspace.create` → `env`) und wirken sich auf den frischen Workspace/Pane aus.
+
+- Leer lassen = Installer-Schlüssel / OpenRouter Default.
+- Per Feldern **OpenRouter Modell** und **OpenRouter Base URL** lässt sich zusätzlich ein individueller Lauf pro Workspace starten; leer = Installer-Schlüssel / OpenRouter Default.
 
 Fehlt der Key im Dashboard, nutzt der Server den im Install-Script hinterlegten Key.
 
