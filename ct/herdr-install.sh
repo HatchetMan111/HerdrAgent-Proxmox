@@ -71,7 +71,7 @@ done
 
 apt-get update -qq
 apt-get install -y -qq curl wget ca-certificates openssh-server \
-  python3 git ripgrep iproute2 procps less nano jq
+  python3 git ripgrep iproute2 procps less nano jq unzip
 
 # --- SSH setup: enable root login with password (fresh CT has no root pw) ---
 step "[2/10] SSH daemon + root access"
