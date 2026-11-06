@@ -24,7 +24,7 @@ WEB_PORT="${WEB_PORT:-7681}"                  # ttyd web terminal port
 DASH_PORT="${DASH_PORT:-8080}"                # herdr web dashboard port
 OPENROUTER_KEY="${OPENROUTER_KEY:-}"        # optional OpenRouter API-Key (OpenRouter)
 OPENROUTER_MODEL="${OPENROUTER_MODEL:-}"    # optional OpenRouter-Modell (ANTHROPIC_MODEL), leer = OpenRouter Default
-HERDR_PLUGINS="${HERDR_PLUGINS:-aemrebarut/herdr-dagr devswha/ovis}"  # space-separated: owner/repo[/subdir] community plugins
+HERDR_PLUGINS="${HERDR_PLUGINS:-aemrebarut/herdr-dagr@v0.3.1 devswha/ovis}"  # space-separated: owner/repo[/subdir][@ref] community plugins
 PUSH_FILES=(herdr-install.sh)
 DASHBOARD_FILES=(
   dashboard/server.py

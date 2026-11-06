@@ -71,7 +71,7 @@ Das Script fragt CT-ID, vCPU, RAM und Disk interaktiv ab. Für unbeaufsichtigte 
 | `TRACE` | `0` | `1` aktiviert `bash -x` |
 | `OPENROUTER_KEY` | *(leer)* | optionaler OpenRouter API-Key für Agenten (siehe [Agenten & OpenRouter](#agenten--openrouter)) |
 | `OPENROUTER_MODEL` | *(leer)* | OpenRouter-Modell für `ANTHROPIC_MODEL` (leer = OpenRouter Default) |
-| `HERDR_PLUGINS` | `aemrebarut/herdr-dagr devswha/ovis` | space-separated Community-Plugin-Quellen `owner/repo[/subdir]` |
+| `HERDR_PLUGINS` | `aemrebarut/herdr-dagr@v0.3.1 devswha/ovis` | space-separated Community-Plugin-Quellen `owner/repo[/subdir][@ref]` (Default-Pin: `@v0.3.1` für herdr-dagr) |
 
 Beispiel:
 
@@ -91,8 +91,8 @@ CT_ID=120 CT_CORES=4 CT_RAM=4096 HERDR_VERSION=latest \
    - Dashboard nach `/opt/herdr-dashboard`
    - systemd-Units `herdr.service`, `ttyd.service`, `herdr-dashboard.service`
    - bun (für TUI-Plugin-Builds und die shepherdr-Web-App)
-   - Community-Plugins via `herdr plugin install --yes <owner>/<repo>[/subdir]`
-     (Default: `aemrebarut/herdr-dagr`, `devswha/ovis`; Quelle: <https://herdr.dev/tui/plugins/>)
+   - Community-Plugins via `herdr plugin install --yes --ref <REF> <owner>/<repo>[/subdir]`
+     (Default: `aemrebarut/herdr-dagr@v0.3.1`, `devswha/ovis`; Quelle: <https://herdr.dev/tui/plugins/>)
    - shepherdr (Mission Control: Background-Work + Web-App, via `install.sh --web`)
 4. Verifiziert automatisch:
    - `systemctl is-active herdr ttyd herdr-dashboard`

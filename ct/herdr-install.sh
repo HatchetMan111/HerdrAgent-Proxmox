@@ -9,7 +9,8 @@
 #
 # <OPENROUTER_API_KEY>  optional OpenRouter API-Key
 # <OPENROUTER_MODEL>    optional OpenRouter model (ANTHROPIC_MODEL), leer = OpenRouter default
-# <HERDR_PLUGINS>        space-separated GitHub sources owner/repo[/subdir] for community plugins
+# <HERDR_PLUGINS>        space-separated GitHub sources owner/repo[/subdir][@ref] for community plugins
+#                        (optional @ref pin, z.B. "aemrebarut/herdr-dagr@v0.3.1")
 #
 # Idempotent: safe to re-run. Existing config, credentials and services are
 # updated in place.
@@ -26,7 +27,7 @@ RAW_REPO_BASE="${6:-https://raw.githubusercontent.com/HatchetMan111/HerdrAgent-P
 WEB_PORT="${7:-${WEB_PORT:-7681}}"
 OPENROUTER_API_KEY="${8:-${OPENROUTER_API_KEY:-}}"
 OPENROUTER_MODEL="${9:-${OPENROUTER_MODEL:-}}"
-HERDR_PLUGINS="${10:-${HERDR_PLUGINS:-aemrebarut/herdr-dagr devswha/ovis}}"
+HERDR_PLUGINS="${10:-${HERDR_PLUGINS:-aemrebarut/herdr-dagr@v0.3.1 devswha/ovis}}"
 HERDR_BIN="/usr/local/bin/herdr"
 TTYD_BIN="/usr/local/bin/ttyd"
 DASH_DIR="/opt/herdr-dashboard"
@@ -152,14 +153,24 @@ mkdir -p /root/.bun
 export PATH="/root/.bun/bin:${PATH}"
 [[ -x /root/.bun/bin/bun ]] || fail "bun is still missing at /root/.bun/bin/bun."
 
-# Community plugins via the herdr plugin manager (GitHub sources: owner/repo[/subdir]).
+# Community plugins via the herdr plugin manager (GitHub sources: owner/repo[/subdir][@ref]).
 # Unset/empty HERDR_PLUGINS means "no extra plugins beyond the defaults".
+# Optional "@ref" pins a release tag/commit (z.B. "aemrebarut/herdr-dagr@v0.3.1") -
+# moving branch heads can drift from released revisions and break the plugin build.
+# Community plugins are optional: a failing plugin must not abort the core stack.
 # shellcheck disable=SC2086  # HERDR_PLUGINS is a space-separated list on purpose
-for plugin in ${HERDR_PLUGINS:-}; do
-  [[ -n "${plugin}" ]] || continue
+for spec in ${HERDR_PLUGINS:-}; do
+  [[ -n "${spec}" ]] || continue
+  plugin="${spec%%@*}"
+  ref="${spec#*@}"
   step "community plugin: ${plugin}"
-  "$HERDR_BIN" plugin install --yes "${plugin}" \
-    || fail "community plugin install failed: ${plugin}"
+  if [[ -n "${ref}" ]]; then
+    "$HERDR_BIN" plugin install --yes --ref "${ref}" "${plugin}" \
+      || echo "WARN: community plugin install failed: ${spec} - continuing without it." >&2
+  else
+    "$HERDR_BIN" plugin install --yes "${plugin}" \
+      || echo "WARN: community plugin install failed: ${spec} - continuing without it." >&2
+  fi
 done
 
 step "[7/10] shepherdr (mission control: background work + web app)"
