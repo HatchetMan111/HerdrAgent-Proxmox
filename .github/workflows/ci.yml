@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell syntax
+        run: |
+          bash -n install/herdr.sh
+          bash -n ct/herdr-install.sh
+
+      - name: ShellCheck
+        run: shellcheck install/herdr.sh ct/herdr-install.sh
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Python compile
+        run: python3 -m py_compile dashboard/server.py
+
+      - name: Python tests
+        run: python3 -m unittest discover -s tests -v
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: JavaScript syntax
+        run: node --check dashboard/static/app.js
+
+      - name: Dashboard assets present
+        run: |
+          test -s dashboard/static/index.html
+          test -s dashboard/static/styles.css
+          test -s dashboard/static/app.js
+          test -s dashboard/static/favicon.svg

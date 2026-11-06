@@ -17,11 +17,19 @@ set -euo pipefail
 # Variables
 # ----------------------------------------------------------------------------
 RAW_REPO_BASE="${RAW_REPO_BASE:-https://raw.githubusercontent.com/HatchetMan111/HerdrAgent-Proxmox/main}"
-HERDR_VERSION="${HERDR_VERSION:-0.8.2}"        # upstream release tag (without 'v')
+HERDR_VERSION="${HERDR_VERSION:-0.9.5}"        # upstream release tag (without 'v') or "latest"
 CT_HOSTNAME="herdr"
 CT_DISK_STORE="${CT_DISK_STORE:-local-lvm}"   # Proxmox storage for the CT disk
-WEB_PORT=7681                                  # ttyd web terminal port
-PUSH_FILES=(herdr-install.sh herdr.service ttyd.service)
+WEB_PORT="${WEB_PORT:-7681}"                  # ttyd web terminal port
+DASH_PORT="${DASH_PORT:-8080}"                # herdr web dashboard port
+PUSH_FILES=(herdr-install.sh)
+DASHBOARD_FILES=(
+  dashboard/server.py
+  dashboard/static/index.html
+  dashboard/static/app.js
+  dashboard/static/styles.css
+  dashboard/static/favicon.svg
+)
 
 # ----------------------------------------------------------------------------
 # Helpers
@@ -35,7 +43,7 @@ header_info() {
   echo '  _  _ ___ _    ___  ___ _  _   _   ___ '
   echo ' | || | __| |  / _ \| __| \| | /_\ | _ \"'
   echo ' | __ | _|| |_| (_) | _|| .` |/ _ \|   /'
-  echo ' |_||_|___|___|\___/|___|_|\_/_/ \_\_|_\'
+  echo ' |_||_|___|___|\___/|___|_|\_/_/ \_\_|_ '
   echo '        LXC installer for Proxmox VE'
   echo
 }
@@ -73,6 +81,20 @@ trap 'die "$LINENO" "Uncaught error - see complete log: ${DEBUG_LOG}"' ERR
 header_info
 msg_info "Debug log: ${DEBUG_LOG}"
 
+# Resolve "latest" once on the host (the container then downloads a fixed tag).
+if [[ "$HERDR_VERSION" == "latest" ]]; then
+  RESOLVED_VERSION=$(curl -fsSL -o /dev/null -w '%{url_effective}' --retry 3 \
+    https://github.com/herdrdev/herdr/releases/latest 2>/dev/null \
+    | sed -n 's#.*/tag/v##p' || true)
+  if [[ -n "$RESOLVED_VERSION" ]]; then
+    HERDR_VERSION="$RESOLVED_VERSION"
+    msg_ok "Latest herdr release: v${HERDR_VERSION}"
+  else
+    HERDR_VERSION="0.9.5"
+    msg_info "Could not resolve the latest herdr release - falling back to v${HERDR_VERSION}."
+  fi
+fi
+
 # ----------------------------------------------------------------------------
 # CT selection (interactive only when attached to a TTY)
 # ----------------------------------------------------------------------------
@@ -101,9 +123,12 @@ CT_CORES="${CT_CORES:-2}"
 CT_RAM="${CT_RAM:-2048}"
 CT_DISK="${CT_DISK:-8}"
 
-for v in "$CT_ID" "$CT_CORES" "$CT_RAM" "$CT_DISK"; do
+for v in "$CT_ID" "$CT_CORES" "$CT_RAM" "$CT_DISK" "$WEB_PORT" "$DASH_PORT"; do
   [[ "$v" =~ ^[0-9]+$ ]] || die "$LINENO" "Invalid numeric value: '$v'"
 done
+(( WEB_PORT < 1 || WEB_PORT > 65535 )) && die "$LINENO" "WEB_PORT out of range: ${WEB_PORT}"
+(( DASH_PORT < 1 || DASH_PORT > 65535 )) && die "$LINENO" "DASH_PORT out of range: ${DASH_PORT}"
+[[ "$WEB_PORT" != "$DASH_PORT" ]] || die "$LINENO" "WEB_PORT and DASH_PORT must differ."
 
 # ----------------------------------------------------------------------------
 # Locate Debian 12 template (searches all vztmpl storages, downloads if needed)
@@ -120,6 +145,8 @@ for S in $VZTMPL_STORAGES; do
 done
 
 if [[ -z "$TEMPLATE_NAME" ]]; then
+  # Intentionally unquoted: split the newline-separated storage list.
+  # shellcheck disable=SC2086
   TEMPLATE_STORAGE="$(printf '%s\n' $VZTMPL_STORAGES | head -n1)"
   msg_info "No Debian 12 template cached - downloading to '${TEMPLATE_STORAGE}'..."
   pveam update >/dev/null 2>&1 || true
@@ -264,6 +291,26 @@ for f in "${PUSH_FILES[@]}"; do
   pct push "$CT_ID" "${STAGING_DIR}/${f}" "/root/${f}" --perms 0755
 done
 
+# Dashboard assets (server.py + static files). Pushed before the in-container
+# installer runs so a local checkout works without network access to GitHub.
+DASH_STAGE="${STAGING_DIR}/dashboard"
+mkdir -p "${DASH_STAGE}/static"
+for f in "${DASHBOARD_FILES[@]}"; do
+  rel="${f#dashboard/}"
+  if [[ -n "$SCRIPT_DIR" && -f "${SCRIPT_DIR}/${f}" ]]; then
+    cp "${SCRIPT_DIR}/${f}" "${DASH_STAGE}/${rel}"
+  else
+    curl -fsSL --retry 5 --retry-all-errors --connect-timeout 15 \
+      -o "${DASH_STAGE}/${rel}" "${RAW_REPO_BASE}/${f}" \
+      || die "$LINENO" "Download failed: ${RAW_REPO_BASE}/${f}"
+  fi
+  [[ -s "${DASH_STAGE}/${rel}" ]] || die "$LINENO" "Dashboard file is empty: ${f}"
+  pct exec "$CT_ID" -- mkdir -p "/opt/herdr-dashboard/$(dirname "$rel")"
+  pct push "$CT_ID" "${DASH_STAGE}/${rel}" "/opt/herdr-dashboard/${rel}" --perms 0644
+done
+pct exec "$CT_ID" -- chmod 0755 /opt/herdr-dashboard/server.py
+msg_ok "Dashboard assets pushed to /opt/herdr-dashboard."
+
 # Random passwords (root SSH fallback + web terminal basic auth)
 # NOTE: no `tr | head` here - that dies with SIGPIPE (141) under pipefail.
 # dd reads exactly N bytes and exits cleanly, so the pipe is safe.
@@ -276,16 +323,33 @@ rand_pw() {
 }
 ROOT_PW="$(rand_pw)"
 WEB_USER="herdr"
-WEB_PW="$(rand_pw)"
+WEB_PW=""
+
+# Re-runs must not break existing logins: reuse the credentials already stored
+# in the container (root-only file written by the in-container installer).
+if [[ "$EXISTING_CT" == "yes" ]]; then
+  EXISTING_CREDS=$(pct exec "$CT_ID" -- cat /etc/default/herdr-web 2>/dev/null || true)
+  if [[ -n "$EXISTING_CREDS" ]]; then
+    OLD_USER=$(printf '%s\n' "$EXISTING_CREDS" | sed -n 's/^WEB_USER=//p' | head -n1)
+    OLD_PW=$(printf '%s\n' "$EXISTING_CREDS" | sed -n 's/^WEB_PW=//p' | head -n1)
+    if [[ -n "$OLD_USER" && -n "$OLD_PW" ]]; then
+      WEB_USER="$OLD_USER"
+      WEB_PW="$OLD_PW"
+      msg_ok "Reusing existing web credentials from /etc/default/herdr-web."
+    fi
+  fi
+fi
+[[ -n "$WEB_PW" ]] || WEB_PW="$(rand_pw)"
 
 # ----------------------------------------------------------------------------
 # Run in-container installer
 # ----------------------------------------------------------------------------
-msg_info "Running in-container installer (apt, ssh, herdr, ttyd, systemd)..."
+msg_info "Running in-container installer (apt, ssh, herdr, ttyd, dashboard, systemd)..."
 CT_OUT="${DEBUG_DIR}/ct-out-$$"
 # PIPESTATUS: only the pct exec exit code decides success (tee must not mask it)
 set +e
-pct exec "$CT_ID" -- bash /root/herdr-install.sh "$HERDR_VERSION" "$ROOT_PW" "$WEB_USER" "$WEB_PW" \
+pct exec "$CT_ID" -- bash /root/herdr-install.sh \
+  "$HERDR_VERSION" "$ROOT_PW" "$WEB_USER" "$WEB_PW" "$DASH_PORT" "$RAW_REPO_BASE" "$WEB_PORT" \
   2>&1 | tee "$CT_OUT"
 CT_RC=${PIPESTATUS[0]}
 set -e
@@ -303,6 +367,7 @@ if grep -q "^HERDR_WEB_CREDENTIALS " "$CT_OUT"; then
   WEB_USER=$(echo "$CRED_LINE"  | sed -n 's/.*user=\([^ ]*\).*/\1/p')
   WEB_PW=$(echo "$CRED_LINE"    | sed -n 's/.*password=\([^ ]*\).*/\1/p')
   WEB_PORT=$(echo "$CRED_LINE"  | sed -n 's/.*port=\([^ ]*\).*/\1/p')
+  DASH_PORT=$(echo "$CRED_LINE" | sed -n 's/.*dash_port=\([^ ]*\).*/\1/p')
 fi
 
 # ----------------------------------------------------------------------------
@@ -311,6 +376,7 @@ fi
 msg_info "Verifying services..."
 SVC_HERDR=$(pct exec "$CT_ID" -- systemctl is-active herdr 2>/dev/null || true)
 SVC_TTYD=$(pct exec "$CT_ID" -- systemctl is-active ttyd 2>/dev/null || true)
+SVC_DASH=$(pct exec "$CT_ID" -- systemctl is-active herdr-dashboard 2>/dev/null || true)
 if [[ "$SVC_HERDR" != "active" ]]; then
   pct exec "$CT_ID" -- journalctl -u herdr --no-pager -n 50 || true
   die "$LINENO" "herdr.service not active (status: ${SVC_HERDR:-unknown})."
@@ -319,7 +385,11 @@ if [[ "$SVC_TTYD" != "active" ]]; then
   pct exec "$CT_ID" -- journalctl -u ttyd --no-pager -n 50 || true
   die "$LINENO" "ttyd.service not active (status: ${SVC_TTYD:-unknown})."
 fi
-msg_ok "systemd services active: herdr=active, ttyd=active"
+if [[ "$SVC_DASH" != "active" ]]; then
+  pct exec "$CT_ID" -- journalctl -u herdr-dashboard --no-pager -n 50 || true
+  die "$LINENO" "herdr-dashboard.service not active (status: ${SVC_DASH:-unknown})."
+fi
+msg_ok "systemd services active: herdr=active, ttyd=active, herdr-dashboard=active"
 
 msg_info "Verifying herdr server (status)..."
 if ! pct exec "$CT_ID" -- bash -c 'timeout 10 /usr/local/bin/herdr status >/dev/null 2>&1'; then
@@ -336,6 +406,18 @@ if [[ "$HTTP_AUTH" != "200" ]]; then
   die "$LINENO" "Web terminal auth check failed (anon=${HTTP_ANON}, auth=${HTTP_AUTH}, expected 401/200)."
 fi
 msg_ok "Web terminal reachable + login OK: http://${CT_IP}:${WEB_PORT} (anon=${HTTP_ANON}, ${WEB_USER}:${WEB_PW} -> ${HTTP_AUTH})"
+
+msg_info "Verifying web dashboard (http://${CT_IP}:${DASH_PORT})..."
+HTTP_DASH_ANON=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://${CT_IP}:${DASH_PORT}/" || echo 000)
+HTTP_DASH_AUTH=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -u "${WEB_USER}:${WEB_PW}" "http://${CT_IP}:${DASH_PORT}/" || echo 000)
+DASH_SNAPSHOT=$(curl -s --max-time 15 -u "${WEB_USER}:${WEB_PW}" \
+  "http://${CT_IP}:${DASH_PORT}/api/snapshot" 2>/dev/null || true)
+if [[ "$HTTP_DASH_AUTH" != "200" ]] \
+   || ! printf '%s' "$DASH_SNAPSHOT" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+  pct exec "$CT_ID" -- journalctl -u herdr-dashboard --no-pager -n 80 || true
+  die "$LINENO" "Web dashboard check failed (anon=${HTTP_DASH_ANON}, auth=${HTTP_DASH_AUTH}, snapshot=${DASH_SNAPSHOT:0:200})."
+fi
+msg_ok "Web dashboard reachable + API OK: http://${CT_IP}:${DASH_PORT} (anon=${HTTP_DASH_ANON}, auth=${HTTP_DASH_AUTH})"
 
 msg_info "Verifying SSH daemon..."
 pct exec "$CT_ID" -- bash -c 'systemctl is-active ssh || systemctl is-active sshd' >/dev/null 2>&1 \
@@ -356,6 +438,7 @@ echo "   CT IP:         ${CT_IP} (DHCP)"
 echo "  ------------------------------------------------------------"
 echo "   ANMELDUNG / LOGIN (bitte notieren!):"
 echo ""
+echo "     Web-Dashboard: http://${CT_IP}:${DASH_PORT}"
 echo "     Web-Terminal:  http://${CT_IP}:${WEB_PORT}"
 echo "     Benutzer:      ${WEB_USER}"
 echo "     Passwort:      ${WEB_PW}"
@@ -369,13 +452,14 @@ fi
 echo "  ------------------------------------------------------------"
 echo "   Passwoerter aendern:"
 echo "     Web:   pct exec ${CT_ID} -- bash -c '"
-echo "            read -p \"user:pw: \" C && sed -i \"s/^WEB_PW=.*/WEB_PW=\${C#*:}/; s/^WEB_USER=.*/WEB_USER=\${C%%:*}/\" /etc/default/ttyd-herdr && systemctl restart ttyd'"
+echo "            read -p \"user:pw: \" C && sed -i \"s/^WEB_PW=.*/WEB_PW=\${C#*:}/; s/^WEB_USER=.*/WEB_USER=\${C%%:*}/\" /etc/default/herdr-web && systemctl restart ttyd herdr-dashboard'"
 echo "     SSH:   pct exec ${CT_ID} -- passwd"
-echo "     (Web-Credentials liegen root-only in /etc/default/ttyd-herdr)"
+echo "     (Web-Credentials liegen root-only in /etc/default/herdr-web)"
 echo "  ------------------------------------------------------------"
 echo "   herdr server:  pct exec ${CT_ID} -- systemctl status herdr"
+echo "   Dashboard:     pct exec ${CT_ID} -- systemctl status herdr-dashboard"
 echo "   Update:        pct exec ${CT_ID} -- herdr update"
-echo "   Reboot test:   pct reboot ${CT_ID} && sleep 25 && pct exec ${CT_ID} -- systemctl is-active herdr ttyd"
+echo "   Reboot test:   pct reboot ${CT_ID} && sleep 25 && pct exec ${CT_ID} -- systemctl is-active herdr ttyd herdr-dashboard"
 echo "  ------------------------------------------------------------"
 echo "   Debug log:     ${DEBUG_LOG}"
 echo "  ============================================================"
